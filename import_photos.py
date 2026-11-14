@@ -10,6 +10,9 @@ Import de photos depuis une carte SD + visionneuse de tri (macOS).
         <- / -> = photo précédente / suivante
      Zoom : boutons + / -, touches + / -, molette de la souris.
      Photo zoomée : cliquer-glisser pour se déplacer, 0 pour revenir.
+     Bande de vignettes en bas : toutes les photos du dossier avec leur
+     statut (rouge = rejet, gris = neutre, vert = gardé) ; cliquer sur une
+     vignette pour l'afficher, molette pour faire défiler.
 
 Les photos sont seulement marquées (fichier classement.json dans chaque
 dossier) : aucun fichier n'est déplacé. Le bouton "Supprimer les photos
@@ -70,6 +73,9 @@ DOSSIER_REJETS = "_rejets"
 FICHIER_CLASSEMENT = "classement.json"
 ZOOM_MAX = 12.0
 PAS_ZOOM = 1.25
+VIGNETTE = (96, 72)       # taille max des vignettes de la bande
+LARGEUR_CASE = 112
+HAUTEUR_BANDE = 112
 
 REJET, NEUTRE, GARDE = "rejet", "neutre", "garde"
 LIBELLES = {REJET: "REJET", NEUTRE: "NEUTRE", GARDE: "GARDÉ"}
@@ -330,6 +336,10 @@ def lancer_interface():
             self.taille_affichee = None
             self.pleine = (None, None)  # (chemin, image pleine résolution)
             self._glisse = None
+            self.vignettes = {}        # chemin -> PhotoImage (None = pas d'aperçu)
+            self.index_par_chemin = {}
+            self.file_vignettes = queue.Queue()
+            self.generation = 0        # change à chaque reconstruction de la bande
 
             barre = ttk.Frame(racine, padding=6)
             barre.pack(side="top", fill="x")
@@ -372,6 +382,21 @@ def lancer_interface():
                 font=("Helvetica", 12))
             self.etiquette_compte.pack(side="right", padx=10)
 
+            # bande de vignettes (au-dessus de la barre d'état)
+            cadre_bande = tk.Frame(racine, bg="#1e1e1e")
+            cadre_bande.pack(side="bottom", fill="x")
+            self.defilement = ttk.Scrollbar(cadre_bande, orient="horizontal")
+            self.defilement.pack(side="bottom", fill="x")
+            self.bande = tk.Canvas(
+                cadre_bande, height=HAUTEUR_BANDE, bg="#1e1e1e",
+                highlightthickness=0, xscrollincrement=40,
+                xscrollcommand=self.defilement.set)
+            self.bande.pack(side="top", fill="x")
+            self.defilement.config(command=self.bande.xview)
+            self.bande.bind("<ButtonPress-1>", self._clic_bande)
+            self.bande.bind("<MouseWheel>", self._molette_bande)
+            self.bande.bind("<Configure>", lambda _e: self._centrer_bande())
+
             self.canevas = tk.Canvas(racine, bg="#111111", highlightthickness=0)
             self.canevas.pack(side="top", fill="both", expand=True)
             self.canevas.bind("<Configure>", self._redimensionne)
@@ -383,6 +408,7 @@ def lancer_interface():
 
             racine.bind("<KeyPress>", self.touche)
             self.afficher()
+            self._recevoir_vignettes()
 
         # ---------------- import ----------------
 
@@ -497,6 +523,7 @@ def lancer_interface():
                 if self.statut(p) == NEUTRE:
                     self.index = i
                     break
+            self.construire_bande()
             self.afficher()
 
         def statut(self, photo):
@@ -515,6 +542,7 @@ def lancer_interface():
                 sauver_classement(photo.dossier, classement)
             except OSError as e:
                 messagebox.showerror("Enregistrement impossible", str(e))
+            self.bande.itemconfig(f"statut{self.index}", fill=COULEURS[statut])
             if self.index < len(self.photos) - 1:
                 self.index += 1
                 self.reinit_zoom()
@@ -560,10 +588,112 @@ def lancer_interface():
             self.cache.clear()
             self.pleine = (None, None)
             self.reinit_zoom()
+            self.construire_bande()
             self.afficher()
             if erreurs:
                 messagebox.showwarning("Fichiers non supprimés",
                                        "\n".join(erreurs[:10]))
+
+        # ---------------- bande de vignettes ----------------
+
+        def construire_bande(self):
+            b = self.bande
+            b.delete("all")
+            self.generation += 1
+            self.index_par_chemin = {}
+            a_charger = []
+            for i, photo in enumerate(self.photos):
+                xc = i * LARGEUR_CASE + LARGEUR_CASE / 2
+                chemin = photo.fichier_affichable()
+                self.index_par_chemin[chemin] = i
+                b.create_rectangle(xc - 48, 8, xc + 48, 80,
+                                   fill="#333333", outline="")
+                if chemin in self.vignettes:
+                    self._poser_vignette(i, chemin)
+                else:
+                    a_charger.append(chemin)
+                b.create_rectangle(xc - 48, 84, xc + 48, 91, outline="",
+                                   fill=COULEURS[self.statut(photo)],
+                                   tags=f"statut{i}")
+                nom = photo.nom if len(photo.nom) <= 15 else photo.nom[:14] + "…"
+                b.create_text(xc, 101, text=nom, fill="#cccccc",
+                              font=("Helvetica", 10))
+            self.vignettes = {c: v for c, v in self.vignettes.items()
+                              if c in self.index_par_chemin}
+            b.config(scrollregion=(0, 0, max(len(self.photos) * LARGEUR_CASE, 1),
+                                   HAUTEUR_BANDE))
+            b.xview_moveto(0)
+            if a_charger:
+                threading.Thread(target=self._charger_vignettes,
+                                 args=(self.generation, a_charger),
+                                 daemon=True).start()
+
+        def _charger_vignettes(self, generation, chemins):
+            """Fil d'arrière-plan : vignettes les plus proches de la photo
+            affichée en premier."""
+            restants = {self.index_par_chemin.get(c, 0): c for c in chemins}
+            while restants and generation == self.generation:
+                i = min(restants, key=lambda k: abs(k - self.index))
+                chemin = restants.pop(i)
+                image = charger_image(chemin, taille_max=2 * VIGNETTE[0])
+                if image is not None:
+                    image.thumbnail(VIGNETTE)
+                self.file_vignettes.put((generation, chemin, image))
+
+        def _recevoir_vignettes(self):
+            try:
+                for _ in range(40):
+                    generation, chemin, image = self.file_vignettes.get_nowait()
+                    i = self.index_par_chemin.get(chemin)
+                    if generation != self.generation or i is None:
+                        continue
+                    self.vignettes[chemin] = (
+                        None if image is None else ImageTk.PhotoImage(image))
+                    self._poser_vignette(i, chemin)
+            except queue.Empty:
+                pass
+            self.racine.after(120, self._recevoir_vignettes)
+
+        def _poser_vignette(self, i, chemin):
+            xc = i * LARGEUR_CASE + LARGEUR_CASE / 2
+            vignette = self.vignettes.get(chemin)
+            if vignette is None:
+                self.bande.create_text(
+                    xc, 44, fill="#999999", font=("Helvetica", 11),
+                    text=chemin.suffix.upper().lstrip("."))
+            else:
+                self.bande.create_image(xc, 44, image=vignette)
+
+        def _centrer_bande(self):
+            """Encadre la photo affichée et la ramène au milieu de la bande."""
+            b = self.bande
+            b.delete("selection")
+            if not self.photos:
+                return
+            x0 = self.index * LARGEUR_CASE
+            b.create_rectangle(x0 + 3, 3, x0 + LARGEUR_CASE - 3,
+                               HAUTEUR_BANDE - 3, outline="white", width=2,
+                               tags="selection")
+            total = len(self.photos) * LARGEUR_CASE
+            visible = max(b.winfo_width(), 1)
+            if total > visible:
+                debut = x0 + LARGEUR_CASE / 2 - visible / 2
+                b.xview_moveto(min(max(debut, 0), total - visible) / total)
+
+        def _clic_bande(self, evenement):
+            i = int(self.bande.canvasx(evenement.x) // LARGEUR_CASE)
+            if 0 <= i < len(self.photos) and i != self.index:
+                self.index = i
+                self.reinit_zoom()
+                self.afficher()
+
+        def _molette_bande(self, evenement):
+            crans = evenement.delta
+            if abs(crans) >= 120:      # Windows
+                crans /= 120
+            crans = int(max(-5, min(5, crans)))
+            if crans:
+                self.bande.xview_scroll(-crans, "units")
 
         # ---------------- clavier ----------------
 
@@ -696,6 +826,7 @@ def lancer_interface():
                 self.etiquette_compte.config(text="")
                 self.texte_zoom.config(text="")
                 self.taille_affichee = None
+                self._centrer_bande()
                 return
 
             photo = self.photos[self.index]
@@ -749,6 +880,7 @@ def lancer_interface():
                 text=f"gardés {statuts.count(GARDE)}   "
                      f"neutres {statuts.count(NEUTRE)}   "
                      f"rejets {statuts.count(REJET)}")
+            self._centrer_bande()
 
     racine = tk.Tk()
     Application(racine)
