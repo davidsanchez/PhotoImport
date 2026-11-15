@@ -115,8 +115,14 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          ls -l fichiers
-          gh release create "$GITHUB_REF_NAME" fichiers/* \
-              --repo "$GITHUB_REPOSITORY" --title "$GITHUB_REF_NAME" --generate-notes \
-            || gh release upload "$GITHUB_REF_NAME" fichiers/* \
+          # les artefacts peuvent contenir des sous-dossiers (dist/ pour
+          # Windows) : on ne passe que des fichiers à gh
+          mapfile -t FICHIERS < <(find fichiers -type f | sort)
+          printf '%s\n' "${FICHIERS[@]}"
+          if gh release view "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" > /dev/null 2>&1; then
+            gh release upload "$GITHUB_REF_NAME" "${FICHIERS[@]}" \
               --repo "$GITHUB_REPOSITORY" --clobber
+          else
+            gh release create "$GITHUB_REF_NAME" "${FICHIERS[@]}" \
+              --repo "$GITHUB_REPOSITORY" --title "$GITHUB_REF_NAME" --generate-notes
+          fi
