@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-Import de photos depuis une carte SD + visionneuse de tri (macOS).
+Import de photos depuis une carte SD + visionneuse de tri
+(macOS, Windows, Linux).
 
   1. Copie les photos de la carte SD vers un dossier parent choisi,
      dans des sous-dossiers AAAA-MM-JJ (date de prise de vue EXIF).
@@ -94,7 +95,8 @@ BORD = "#2f3136"
 TEXTE = "#e8e8ea"
 TEXTE_2 = "#9a9da3"
 ACCENT = "#4c8dff"
-POLICE = "Helvetica Neue"
+POLICE = {"darwin": "Helvetica Neue", "win32": "Segoe UI"}.get(
+    sys.platform, "DejaVu Sans")
 
 LARGEUR_COTE = 268
 NAV = (240, 160)          # zone de la vue d'ensemble
@@ -167,16 +169,30 @@ def date_prise_de_vue(chemin):
 # --------------------------------------------------------------------------
 
 def detecter_cartes_sd():
-    """Volumes montés dans /Volumes qui contiennent un dossier DCIM."""
-    cartes = []
-    volumes = Path("/Volumes")
-    if volumes.is_dir():
-        for vol in sorted(volumes.iterdir()):
+    """Volumes amovibles qui contiennent un dossier DCIM
+    (macOS : /Volumes, Windows : lecteurs D: à Z:, Linux : /media, /run/media)."""
+    racines = []
+    if sys.platform == "win32":
+        racines = [Path(f"{lettre}:\\") for lettre in "DEFGHIJKLMNOPQRSTUVWXYZ"]
+    else:
+        if sys.platform == "darwin":
+            bases = [Path("/Volumes")]
+        else:
+            utilisateur = os.environ.get("USER", "")
+            bases = [Path("/media") / utilisateur,
+                     Path("/run/media") / utilisateur, Path("/media")]
+        for base in bases:
             try:
-                if (vol / "DCIM").is_dir():
-                    cartes.append(vol / "DCIM")
+                racines += sorted(base.iterdir())
             except OSError:
                 pass
+    cartes = []
+    for racine in racines:
+        try:
+            if (racine / "DCIM").is_dir() and racine / "DCIM" not in cartes:
+                cartes.append(racine / "DCIM")
+        except OSError:
+            pass
     return cartes
 
 
@@ -460,6 +476,10 @@ def lancer_interface():
             self.defilement.config(command=self.bande.xview)
             self.bande.bind("<ButtonPress-1>", self._clic_bande)
             self.bande.bind("<MouseWheel>", self._molette_bande)
+            self.bande.bind("<Button-4>",      # Linux
+                            lambda _e: self.bande.xview_scroll(-1, "units"))
+            self.bande.bind("<Button-5>",
+                            lambda _e: self.bande.xview_scroll(1, "units"))
             self.bande.bind("<Configure>", lambda _e: self._centrer_bande())
 
             # ----- panneau latéral : navigation + histogramme -----
@@ -550,7 +570,8 @@ def lancer_interface():
                         f"Importer depuis :\n{cartes[0]} ?"):
                     source = cartes[0]
             if source is None:
-                depart = str(cartes[0]) if cartes else "/Volumes"
+                depart = (str(cartes[0]) if cartes else
+                          "/Volumes" if sys.platform == "darwin" else None)
                 choix = filedialog.askdirectory(
                     title="Choisir la carte SD (ou le dossier source)",
                     initialdir=depart)

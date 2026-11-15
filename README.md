@@ -1,6 +1,6 @@
 # PhotoImport
 
-Import de photos depuis une carte SD (macOS) et tri rapide.
+Import de photos depuis une carte SD et tri rapide (macOS, Windows, Linux).
 
 - Copie les photos dans un dossier parent, dans des sous-dossiers `AAAA-MM-JJ`
   (date de prise de vue lue dans les métadonnées).
@@ -15,10 +15,21 @@ Import de photos depuis une carte SD (macOS) et tri rapide.
 
 ## Installation
 
+Les installateurs sont dans les
+[releases](https://github.com/davidsanchez/PhotoImport/releases) :
+`.dmg` pour macOS (Apple Silicon ou Intel), `-setup.exe` pour Windows,
+`.deb` ou `.tar.gz` pour Linux. Ils sont construits automatiquement à chaque
+tag (`git tag v1.0.0 && git push origin v1.0.0`).
+
+Les applications ne sont pas signées : au premier lancement, macOS et Windows
+affichent un avertissement qu'il faut passer manuellement.
+
+## Lancer depuis les sources
+
 ```
-pip3 install Pillow
+pip3 install -r requirements.txt
 python3 import_photos.py
 ```
 
-Optionnel : `pip3 install rawpy exifread pillow-heif` (RAW et HEIC),
-`pip3 install send2trash` (suppression vers la Corbeille).
+Seul Pillow est indispensable ; les autres paquets ajoutent les RAW, le HEIC
+et la suppression vers la Corbeille.

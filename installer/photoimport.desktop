@@ -1,0 +1,7 @@
+[Desktop Entry]
+Type=Application
+Name=PhotoImport
+Comment=Import de photos depuis une carte SD et tri rapide
+Exec=photoimport
+Terminal=false
+Categories=Graphics;Photography;
