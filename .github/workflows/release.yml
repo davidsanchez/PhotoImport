@@ -124,5 +124,6 @@ jobs:
               --repo "$GITHUB_REPOSITORY" --clobber
           else
             gh release create "$GITHUB_REF_NAME" "${FICHIERS[@]}" \
-              --repo "$GITHUB_REPOSITORY" --title "$GITHUB_REF_NAME" --generate-notes
+              --repo "$GITHUB_REPOSITORY" --title "$GITHUB_REF_NAME" --generate-notes \
+              --notes "Les applications ne sont pas signées : au premier lancement, macOS et Windows affichent un avertissement. La marche à suivre est dans le [README](https://github.com/$GITHUB_REPOSITORY#installation) (sur Mac : Réglages Système > Confidentialité et sécurité > Ouvrir quand même)."
           fi

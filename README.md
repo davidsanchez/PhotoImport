@@ -22,8 +22,45 @@ Les installateurs sont dans les
 `.deb` ou `.tar.gz` pour Linux. Ils sont construits automatiquement à chaque
 tag (`git tag v1.0.0 && git push origin v1.0.0`).
 
-Les applications ne sont pas signées : au premier lancement, macOS et Windows
-affichent un avertissement qu'il faut passer manuellement.
+### macOS
+
+1. Téléchargez le `.dmg` qui correspond à votre Mac : `macos-arm64` pour les
+   Mac Apple Silicon (M1 et suivants), `macos-intel` pour les Mac Intel.
+2. Ouvrez le `.dmg` et glissez **PhotoImport** dans **Applications**.
+3. Lancez PhotoImport. L'application n'est pas signée auprès d'Apple : macOS
+   refuse de l'ouvrir la première fois et affiche un avertissement. Cliquez
+   sur **Terminé** (pas sur « Placer dans la corbeille »).
+4. Ouvrez **Réglages Système > Confidentialité et sécurité**, descendez
+   jusqu'à la section **Sécurité** : un message indique que PhotoImport a été
+   bloqué. Cliquez sur **Ouvrir quand même**, puis confirmez avec votre mot de
+   passe ou Touch ID.
+5. Les lancements suivants se font normalement, par double-clic.
+
+Le bouton « Ouvrir quand même » n'apparaît qu'après une première tentative
+d'ouverture, et pendant environ une heure. Sur macOS 14 et antérieurs, un clic
+droit sur l'application puis **Ouvrir** suffit.
+
+Si macOS affiche « PhotoImport est endommagé et ne peut pas être ouvert »,
+retirez la marque de quarantaine dans le Terminal :
+
+```
+xattr -dr com.apple.quarantine /Applications/PhotoImport.app
+```
+
+Au premier import, macOS demande aussi l'autorisation d'accéder au volume
+amovible (la carte SD) et au dossier de destination : acceptez.
+
+### Windows
+
+Lancez le `-setup.exe`. L'installateur n'est pas signé : si SmartScreen
+affiche « Windows a protégé votre ordinateur », cliquez sur **Informations
+complémentaires**, puis sur **Exécuter quand même**.
+
+### Linux
+
+Debian / Ubuntu : `sudo apt install ./PhotoImport-<version>-linux-amd64.deb`,
+puis lancez `photoimport`. Autres distributions : décompressez le `.tar.gz`
+et lancez le fichier `PhotoImport`.
 
 ## Lancer depuis les sources
 
