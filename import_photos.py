@@ -13,6 +13,9 @@ Import de photos depuis une carte SD + visionneuse de tri (macOS).
      Bande de vignettes en bas : toutes les photos du dossier avec leur
      statut (rouge = rejet, gris = neutre, vert = gardé) ; cliquer sur une
      vignette pour l'afficher, molette pour faire défiler.
+     Panneau de droite : navigation (vue d'ensemble de la photo avec le cadre
+     de la zone affichée ; cliquer ou glisser pour s'y déplacer) et
+     histogramme rouge / vert / bleu.
 
 Les photos sont seulement marquées (fichier classement.json dans chaque
 dossier) : aucun fichier n'est déplacé. Le bouton "Supprimer les photos
@@ -37,7 +40,7 @@ from datetime import datetime
 from pathlib import Path
 
 try:
-    from PIL import Image, ImageOps
+    from PIL import Image, ImageChops, ImageDraw, ImageOps
 except ImportError:
     sys.exit("Pillow est requis :  pip3 install Pillow")
 
@@ -79,7 +82,22 @@ HAUTEUR_BANDE = 112
 
 REJET, NEUTRE, GARDE = "rejet", "neutre", "garde"
 LIBELLES = {REJET: "REJET", NEUTRE: "NEUTRE", GARDE: "GARDÉ"}
-COULEURS = {REJET: "#d9453b", NEUTRE: "#8a8a8a", GARDE: "#3fae5a"}
+COULEURS = {REJET: "#e5484d", NEUTRE: "#6b6f76", GARDE: "#30a46c"}
+
+# thème sombre
+FOND = "#131417"        # derrière la photo
+PANNEAU = "#1d1e22"     # barres et panneau latéral
+SURFACE = "#2a2c31"     # boutons, cases vides
+SURVOL = "#363940"
+BORD = "#2f3136"
+TEXTE = "#e8e8ea"
+TEXTE_2 = "#9a9da3"
+ACCENT = "#4c8dff"
+POLICE = "Helvetica Neue"
+
+LARGEUR_COTE = 268
+NAV = (240, 160)          # zone de la vue d'ensemble
+HAUTEUR_HISTO = 120
 
 
 # --------------------------------------------------------------------------
@@ -307,6 +325,36 @@ def charger_image(chemin, taille_max=TAILLE_CACHE):
         return None
 
 
+def image_histogramme(image, largeur, hauteur, fond=FOND):
+    """Dessine l'histogramme R/V/B d'une image PIL (les zones où les canaux
+    se recouvrent apparaissent en couleurs mélangées, jusqu'au gris clair)."""
+    petit = image.copy()
+    petit.thumbnail((512, 512))
+    h = petit.convert("RGB").histogram()
+    canaux = []
+    for debut in (0, 256, 512):
+        c = h[debut:debut + 256]
+        # léger lissage (moyenne sur 3 niveaux) pour éviter l'effet de peigne
+        canaux.append([(c[max(i - 1, 0)] + c[i] + c[min(i + 1, 255)]) / 3
+                       for i in range(256)])
+    # on ignore les extrêmes (noirs/blancs bouchés) pour l'échelle verticale
+    plafond = (max(max(c[1:255]) for c in canaux)
+               or max(max(c) for c in canaux) or 1)
+    l2, h2 = largeur * 2, hauteur * 2     # dessiné en double puis réduit
+    masques = []
+    for canal in canaux:
+        masque = Image.new("L", (l2, h2), 0)
+        points = [(0, h2)]
+        for i, valeur in enumerate(canal):
+            points.append((i * (l2 - 1) / 255,
+                           h2 - min(valeur / plafond, 1.0) * (h2 - 8)))
+        points.append((l2 - 1, h2))
+        ImageDraw.Draw(masque).polygon(points, fill=205)
+        masques.append(masque)
+    rvb = Image.merge("RGB", masques).resize((largeur, hauteur), Image.LANCZOS)
+    return ImageChops.lighter(rvb, Image.new("RGB", (largeur, hauteur), fond))
+
+
 # --------------------------------------------------------------------------
 # Interface
 # --------------------------------------------------------------------------
@@ -320,8 +368,8 @@ def lancer_interface():
         def __init__(self, racine):
             self.racine = racine
             racine.title("Import et tri de photos")
-            racine.geometry("1200x800")
-            racine.minsize(700, 450)
+            racine.geometry("1400x880")
+            racine.minsize(900, 600)
 
             self.photos = []
             self.index = 0
@@ -341,54 +389,70 @@ def lancer_interface():
             self.file_vignettes = queue.Queue()
             self.generation = 0        # change à chaque reconstruction de la bande
 
-            barre = ttk.Frame(racine, padding=6)
+            self.zone_visible = None   # partie de l'image à l'écran (0..1)
+            self.cote_chemin = object()  # photo montrée dans le panneau latéral
+            self.nav_boite = None
+            self.nav_tk = self.histo_tk = None
+
+            self._theme()
+
+            # ----- barre d'outils -----
+            barre = ttk.Frame(racine, padding=(12, 10))
             barre.pack(side="top", fill="x")
-            for texte, commande in (
-                    ("Importer depuis la carte SD…", self.lancer_import),
-                    ("Ouvrir un dossier à trier…", self.ouvrir_dossier),
-                    ("Supprimer les photos rejetées", self.supprimer_rejets)):
-                ttk.Button(barre, text=texte, command=commande,
-                           takefocus=0).pack(side="left", padx=(0, 6))
-            ttk.Separator(barre, orient="vertical").pack(
-                side="left", fill="y", padx=6)
+            ttk.Button(barre, text="Importer la carte SD…",
+                       style="Accent.TButton", takefocus=0,
+                       command=self.lancer_import).pack(side="left", padx=(0, 8))
+            ttk.Button(barre, text="Ouvrir un dossier…", takefocus=0,
+                       command=self.ouvrir_dossier).pack(side="left", padx=(0, 8))
+            ttk.Button(barre, text="Supprimer les photos rejetées",
+                       style="Danger.TButton", takefocus=0,
+                       command=self.supprimer_rejets).pack(side="left")
+            tk.Frame(barre, width=1, bg=BORD).pack(side="left", fill="y", padx=14)
             ttk.Button(barre, text="−", width=3, takefocus=0,
                        command=lambda: self.changer_zoom(1 / PAS_ZOOM)
                        ).pack(side="left")
             ttk.Button(barre, text="+", width=3, takefocus=0,
                        command=lambda: self.changer_zoom(PAS_ZOOM)
-                       ).pack(side="left", padx=(2, 0))
+                       ).pack(side="left", padx=(4, 0))
             ttk.Button(barre, text="Ajuster", takefocus=0,
                        command=self.reinit_zoom_et_afficher
-                       ).pack(side="left", padx=(6, 0))
-            self.texte_zoom = ttk.Label(barre, text="", width=7)
-            self.texte_zoom.pack(side="left", padx=6)
+                       ).pack(side="left", padx=(8, 0))
+            self.texte_zoom = ttk.Label(barre, text="", width=7,
+                                        style="Discret.TLabel")
+            self.texte_zoom.pack(side="left", padx=10)
             self.barre_progression = ttk.Progressbar(barre, length=180)
             self.barre_progression.pack(side="right")
-            self.texte_progression = ttk.Label(barre, text="")
-            self.texte_progression.pack(side="right", padx=8)
+            self.texte_progression = ttk.Label(barre, text="",
+                                               style="Discret.TLabel")
+            self.texte_progression.pack(side="right", padx=10)
+            tk.Frame(racine, height=1, bg=BORD).pack(side="top", fill="x")
 
-            bas = tk.Frame(racine, bg="#1e1e1e")
+            # ----- barre d'état -----
+            bas = tk.Frame(racine, bg=PANNEAU)
             bas.pack(side="bottom", fill="x")
             self.etiquette_statut = tk.Label(
-                bas, text="", width=9, fg="white", bg="#1e1e1e",
-                font=("Helvetica", 15, "bold"), pady=6)
-            self.etiquette_statut.pack(side="left", padx=(8, 10), pady=6)
+                bas, text="", width=9, fg="white", bg=PANNEAU,
+                font=(POLICE, 12, "bold"), pady=4)
+            self.etiquette_statut.pack(side="left", padx=(12, 12), pady=8)
             self.etiquette_info = tk.Label(
-                bas, text="", fg="#dddddd", bg="#1e1e1e", anchor="w",
-                font=("Helvetica", 13))
+                bas, text="", fg=TEXTE, bg=PANNEAU, anchor="w",
+                font=(POLICE, 13))
             self.etiquette_info.pack(side="left", fill="x", expand=True)
-            self.etiquette_compte = tk.Label(
-                bas, text="", fg="#aaaaaa", bg="#1e1e1e",
-                font=("Helvetica", 12))
-            self.etiquette_compte.pack(side="right", padx=10)
+            self.compteurs = {}
+            for statut in (REJET, NEUTRE, GARDE):   # affichés de droite à gauche
+                self.compteurs[statut] = tk.Label(
+                    bas, text="", bg=PANNEAU, font=(POLICE, 12),
+                    fg=COULEURS[statut] if statut != NEUTRE else TEXTE_2)
+                self.compteurs[statut].pack(side="right", padx=(0, 14))
 
-            # bande de vignettes (au-dessus de la barre d'état)
-            cadre_bande = tk.Frame(racine, bg="#1e1e1e")
+            # ----- bande de vignettes (au-dessus de la barre d'état) -----
+            cadre_bande = tk.Frame(racine, bg=PANNEAU)
             cadre_bande.pack(side="bottom", fill="x")
+            tk.Frame(cadre_bande, height=1, bg=BORD).pack(side="top", fill="x")
             self.defilement = ttk.Scrollbar(cadre_bande, orient="horizontal")
             self.defilement.pack(side="bottom", fill="x")
             self.bande = tk.Canvas(
-                cadre_bande, height=HAUTEUR_BANDE, bg="#1e1e1e",
+                cadre_bande, height=HAUTEUR_BANDE, bg=PANNEAU,
                 highlightthickness=0, xscrollincrement=40,
                 xscrollcommand=self.defilement.set)
             self.bande.pack(side="top", fill="x")
@@ -397,7 +461,37 @@ def lancer_interface():
             self.bande.bind("<MouseWheel>", self._molette_bande)
             self.bande.bind("<Configure>", lambda _e: self._centrer_bande())
 
-            self.canevas = tk.Canvas(racine, bg="#111111", highlightthickness=0)
+            # ----- panneau latéral : navigation + histogramme -----
+            cote = tk.Frame(racine, bg=PANNEAU, width=LARGEUR_COTE)
+            cote.pack(side="right", fill="y")
+            cote.pack_propagate(False)
+            tk.Frame(cote, width=1, bg=BORD).pack(side="left", fill="y")
+
+            def titre(texte):
+                tk.Label(cote, text=texte, bg=PANNEAU, fg=TEXTE_2, anchor="w",
+                         font=(POLICE, 10, "bold")
+                         ).pack(fill="x", padx=14, pady=(16, 6))
+
+            titre("NAVIGATION")
+            self.nav = tk.Canvas(cote, width=NAV[0], height=NAV[1], bg=FOND,
+                                 highlightthickness=0, cursor="crosshair")
+            self.nav.pack(padx=14)
+            self.nav.bind("<ButtonPress-1>", self._clic_nav)
+            self.nav.bind("<B1-Motion>", self._clic_nav)
+            titre("HISTOGRAMME")
+            self.histo = tk.Canvas(cote, width=NAV[0], height=HAUTEUR_HISTO,
+                                   bg=FOND, highlightthickness=0)
+            self.histo.pack(padx=14)
+            titre("RACCOURCIS")
+            tk.Label(cote, bg=PANNEAU, fg=TEXTE_2, justify="left", anchor="w",
+                     font=(POLICE, 11),
+                     text="X   rejet\nN   neutre\nP   gardé\n"
+                          "←  →   photo précédente / suivante\n"
+                          "+  −   zoom\n0   ajuster à la fenêtre"
+                     ).pack(fill="x", padx=14)
+
+            # ----- photo -----
+            self.canevas = tk.Canvas(racine, bg=FOND, highlightthickness=0)
             self.canevas.pack(side="top", fill="both", expand=True)
             self.canevas.bind("<Configure>", self._redimensionne)
             self.canevas.bind("<MouseWheel>", self._molette)
@@ -409,6 +503,36 @@ def lancer_interface():
             racine.bind("<KeyPress>", self.touche)
             self.afficher()
             self._recevoir_vignettes()
+
+        def _theme(self):
+            """Thème sombre (le thème « clam » accepte des couleurs sur macOS)."""
+            self.racine.configure(bg=PANNEAU)
+            st = ttk.Style(self.racine)
+            st.theme_use("clam")
+            st.configure(".", background=PANNEAU, foreground=TEXTE,
+                         font=(POLICE, 13))
+            st.configure("TFrame", background=PANNEAU)
+            st.configure("TLabel", background=PANNEAU, foreground=TEXTE)
+            st.configure("Discret.TLabel", foreground=TEXTE_2, font=(POLICE, 12))
+            st.configure("TButton", background=SURFACE, foreground=TEXTE,
+                         borderwidth=0, relief="flat", padding=(12, 6),
+                         focusthickness=0)
+            st.map("TButton", background=[("pressed", BORD), ("active", SURVOL)])
+            st.configure("Accent.TButton", background=ACCENT, foreground="white")
+            st.map("Accent.TButton",
+                   background=[("pressed", "#3a6fd0"), ("active", "#6aa0ff")])
+            st.configure("Danger.TButton", foreground="#ff8a8e")
+            st.map("Danger.TButton",
+                   background=[("pressed", BORD), ("active", "#4a2b2e")])
+            st.configure("Horizontal.TProgressbar", troughcolor=SURFACE,
+                         background=ACCENT, borderwidth=0, thickness=6,
+                         lightcolor=ACCENT, darkcolor=ACCENT,
+                         bordercolor=SURFACE)
+            st.configure("Horizontal.TScrollbar", troughcolor=PANNEAU,
+                         background=SURFACE, borderwidth=0, arrowsize=10,
+                         arrowcolor=TEXTE_2, bordercolor=PANNEAU,
+                         lightcolor=SURFACE, darkcolor=SURFACE)
+            st.map("Horizontal.TScrollbar", background=[("active", SURVOL)])
 
         # ---------------- import ----------------
 
@@ -587,6 +711,7 @@ def lancer_interface():
             self.index = min(self.index, max(len(self.photos) - 1, 0))
             self.cache.clear()
             self.pleine = (None, None)
+            self.cote_chemin = object()
             self.reinit_zoom()
             self.construire_bande()
             self.afficher()
@@ -607,7 +732,7 @@ def lancer_interface():
                 chemin = photo.fichier_affichable()
                 self.index_par_chemin[chemin] = i
                 b.create_rectangle(xc - 48, 8, xc + 48, 80,
-                                   fill="#333333", outline="")
+                                   fill=SURFACE, outline="")
                 if chemin in self.vignettes:
                     self._poser_vignette(i, chemin)
                 else:
@@ -616,8 +741,8 @@ def lancer_interface():
                                    fill=COULEURS[self.statut(photo)],
                                    tags=f"statut{i}")
                 nom = photo.nom if len(photo.nom) <= 15 else photo.nom[:14] + "…"
-                b.create_text(xc, 101, text=nom, fill="#cccccc",
-                              font=("Helvetica", 10))
+                b.create_text(xc, 101, text=nom, fill=TEXTE_2,
+                              font=(POLICE, 10))
             self.vignettes = {c: v for c, v in self.vignettes.items()
                               if c in self.index_par_chemin}
             b.config(scrollregion=(0, 0, max(len(self.photos) * LARGEUR_CASE, 1),
@@ -659,7 +784,7 @@ def lancer_interface():
             vignette = self.vignettes.get(chemin)
             if vignette is None:
                 self.bande.create_text(
-                    xc, 44, fill="#999999", font=("Helvetica", 11),
+                    xc, 44, fill=TEXTE_2, font=(POLICE, 11),
                     text=chemin.suffix.upper().lstrip("."))
             else:
                 self.bande.create_image(xc, 44, image=vignette)
@@ -672,7 +797,7 @@ def lancer_interface():
                 return
             x0 = self.index * LARGEUR_CASE
             b.create_rectangle(x0 + 3, 3, x0 + LARGEUR_CASE - 3,
-                               HAUTEUR_BANDE - 3, outline="white", width=2,
+                               HAUTEUR_BANDE - 3, outline=ACCENT, width=2,
                                tags="selection")
             total = len(self.photos) * LARGEUR_CASE
             visible = max(b.winfo_width(), 1)
@@ -807,6 +932,45 @@ def lancer_interface():
                 self.racine.after_cancel(self._redessin)
             self._redessin = self.racine.after(80, self.afficher)
 
+        def maj_cote(self, chemin, image):
+            """Panneau latéral : vue d'ensemble, cadre de zone et histogramme."""
+            if chemin != self.cote_chemin:
+                self.cote_chemin = chemin
+                self.nav.delete("all")
+                self.histo.delete("all")
+                self.nav_boite = None
+                if image is not None:
+                    mini = image.copy()
+                    mini.thumbnail(NAV)
+                    ox = (NAV[0] - mini.width) // 2
+                    oy = (NAV[1] - mini.height) // 2
+                    self.nav_boite = (ox, oy, mini.width, mini.height)
+                    self.nav_tk = ImageTk.PhotoImage(mini)
+                    self.nav.create_image(ox, oy, anchor="nw", image=self.nav_tk)
+                    self.histo_tk = ImageTk.PhotoImage(
+                        image_histogramme(image, NAV[0], HAUTEUR_HISTO))
+                    self.histo.create_image(0, 0, anchor="nw",
+                                            image=self.histo_tk)
+            self.nav.delete("zone")
+            if self.nav_boite and self.zone_visible and self.zoom > 1.0:
+                ox, oy, l, h = self.nav_boite
+                g, ht, d, b = self.zone_visible
+                self.nav.create_rectangle(
+                    ox + g * l, oy + ht * h, ox + d * l, oy + b * h,
+                    outline="white", width=2, tags="zone")
+
+        def _clic_nav(self, evenement):
+            """Clic ou glissé dans la vue d'ensemble : va à cet endroit
+            (et zoome ×3 si la photo était affichée en entier)."""
+            if not self.photos or not self.nav_boite:
+                return
+            ox, oy, l, h = self.nav_boite
+            self.centre = (min(max((evenement.x - ox) / l, 0.0), 1.0),
+                           min(max((evenement.y - oy) / h, 0.0), 1.0))
+            if self.zoom <= 1.0:
+                self.zoom = 3.0
+            self.afficher()
+
         def afficher(self):
             self._redessin = None
             c = self.canevas
@@ -816,25 +980,27 @@ def lancer_interface():
 
             if not self.photos:
                 c.create_text(
-                    *centre, fill="#bbbbbb", font=("Helvetica", 16),
+                    *centre, fill=TEXTE_2, font=(POLICE, 17),
                     justify="center",
-                    text="Importez une carte SD ou ouvrez un dossier.\n\n"
-                         "X = rejet     N = neutre     P = gardé\n"
-                         "←  →  = photo précédente / suivante")
-                self.etiquette_statut.config(text="", bg="#1e1e1e")
+                    text="Importez une carte SD ou ouvrez un dossier à trier")
+                self.etiquette_statut.config(text="", bg=PANNEAU)
                 self.etiquette_info.config(text="")
-                self.etiquette_compte.config(text="")
+                for etiquette in self.compteurs.values():
+                    etiquette.config(text="")
                 self.texte_zoom.config(text="")
                 self.taille_affichee = None
+                self.zone_visible = None
+                self.maj_cote(None, None)
                 self._centrer_bande()
                 return
 
             photo = self.photos[self.index]
-            image = self.image_de(photo)
+            image = apercu = self.image_de(photo)
             if image is None:
                 self.taille_affichee = None
+                self.zone_visible = None
                 c.create_text(
-                    *centre, fill="#bbbbbb", font=("Helvetica", 15),
+                    *centre, fill=TEXTE_2, font=(POLICE, 15),
                     justify="center",
                     text=f"Aperçu indisponible\n{photo.fichier_affichable().name}"
                          + ("\n\n(pip3 install rawpy pour afficher les RAW)"
@@ -856,6 +1022,8 @@ def lancer_interface():
                 self.taille_affichee = (li * echelle, hi * echelle)
                 boite = (max(0, cx - demi_l), max(0, cy - demi_h),
                          min(li, cx + demi_l), min(hi, cy + demi_h))
+                self.zone_visible = (boite[0] / li, boite[1] / hi,
+                                     boite[2] / li, boite[3] / hi)
                 taille = (max(1, round((boite[2] - boite[0]) * echelle)),
                           max(1, round((boite[3] - boite[1]) * echelle)))
                 filtre = Image.BICUBIC if self.zoom == 1.0 else Image.BILINEAR
@@ -863,11 +1031,12 @@ def lancer_interface():
                 self.image_tk = ImageTk.PhotoImage(vue)
                 c.create_image(*centre, image=self.image_tk)
 
+            self.maj_cote(photo.fichier_affichable(), apercu)
             self.texte_zoom.config(text=f"× {self.zoom:.1f}".replace(".", ","))
             statut = self.statut(photo)
             if statut != NEUTRE:  # liseré de couleur autour de l'image
-                c.create_rectangle(3, 3, largeur - 3, hauteur - 3,
-                                   outline=COULEURS[statut], width=6)
+                c.create_rectangle(2, 2, largeur - 2, hauteur - 2,
+                                   outline=COULEURS[statut], width=4)
             self.etiquette_statut.config(text=LIBELLES[statut],
                                          bg=COULEURS[statut])
             extensions = " + ".join(sorted(f.suffix.upper().lstrip(".")
@@ -876,10 +1045,9 @@ def lancer_interface():
                 text=f"{self.index + 1} / {len(self.photos)}    "
                      f"{photo.dossier.name} / {photo.nom}  ({extensions})")
             statuts = [self.statut(p) for p in self.photos]
-            self.etiquette_compte.config(
-                text=f"gardés {statuts.count(GARDE)}   "
-                     f"neutres {statuts.count(NEUTRE)}   "
-                     f"rejets {statuts.count(REJET)}")
+            for cle, nom in ((GARDE, "gardés"), (NEUTRE, "neutres"),
+                             (REJET, "rejets")):
+                self.compteurs[cle].config(text=f"●  {statuts.count(cle)} {nom}")
             self._centrer_bande()
 
     racine = tk.Tk()

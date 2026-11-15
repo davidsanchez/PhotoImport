@@ -8,6 +8,8 @@ Import de photos depuis une carte SD (macOS) et tri rapide.
 - Zoom : boutons `+` / `−`, touches `+` / `-`, molette ; `0` pour revenir.
 - Bande de vignettes en bas : toutes les photos du dossier avec leur statut,
   clic pour naviguer.
+- Panneau de droite : vue d'ensemble de la photo avec le cadre de la zone
+  affichée (clic ou glissé pour s'y déplacer) et histogramme rouge / vert / bleu.
 - Bouton « Supprimer les photos rejetées » (avec confirmation).
 
 ## Installation
