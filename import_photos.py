@@ -9,7 +9,8 @@ Import de photos depuis une carte SD + visionneuse de tri (macOS).
         X = rejet      N = neutre      P = gardé
         <- / -> = photo précédente / suivante
      Zoom : boutons + / -, touches + / -, molette de la souris.
-     Photo zoomée : cliquer-glisser pour se déplacer, 0 pour revenir.
+     Photo zoomée : cliquer-glisser pour se déplacer ; double-clic dans
+     la photo (ou touche 0) pour l'ajuster à la fenêtre.
      Bande de vignettes en bas : toutes les photos du dossier avec leur
      statut (rouge = rejet, gris = neutre, vert = gardé) ; cliquer sur une
      vignette pour l'afficher, molette pour faire défiler.
@@ -487,7 +488,7 @@ def lancer_interface():
                      font=(POLICE, 11),
                      text="X   rejet\nN   neutre\nP   gardé\n"
                           "←  →   photo précédente / suivante\n"
-                          "+  −   zoom\n0   ajuster à la fenêtre"
+                          "+  −   zoom\n0 ou double-clic   ajuster"
                      ).pack(fill="x", padx=14)
 
             # ----- photo -----
@@ -499,6 +500,8 @@ def lancer_interface():
             self.canevas.bind("<Button-5>", self._molette)
             self.canevas.bind("<ButtonPress-1>", self._debut_glisse)
             self.canevas.bind("<B1-Motion>", self._glisser)
+            self.canevas.bind("<Double-Button-1>",
+                              lambda _e: self.reinit_zoom_et_afficher())
 
             racine.bind("<KeyPress>", self.touche)
             self.afficher()

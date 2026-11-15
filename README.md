@@ -5,7 +5,8 @@ Import de photos depuis une carte SD (macOS) et tri rapide.
 - Copie les photos dans un dossier parent, dans des sous-dossiers `AAAA-MM-JJ`
   (date de prise de vue lue dans les métadonnées).
 - Visionneuse pour marquer chaque photo : `X` rejet, `N` neutre, `P` gardé.
-- Zoom : boutons `+` / `−`, touches `+` / `-`, molette ; `0` pour revenir.
+- Zoom : boutons `+` / `−`, touches `+` / `-`, molette ; `0` ou double-clic
+  dans la photo pour l'ajuster à la fenêtre.
 - Bande de vignettes en bas : toutes les photos du dossier avec leur statut,
   clic pour naviguer.
 - Panneau de droite : vue d'ensemble de la photo avec le cadre de la zone
