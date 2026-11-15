@@ -37,6 +37,7 @@ import queue
 import shutil
 import sys
 import threading
+import time
 from collections import OrderedDict
 from datetime import datetime
 from pathlib import Path
@@ -225,34 +226,90 @@ def _destination_libre(dest, taille):
         n += 1
 
 
+def _copier(src, dest, avance=None):
+    """Copie par blocs (pour suivre la progression), puis dates du fichier."""
+    with open(src, "rb") as entree, open(dest, "wb") as sortie:
+        while True:
+            bloc = entree.read(4 * 1024 * 1024)
+            if not bloc:
+                break
+            sortie.write(bloc)
+            if avance:
+                avance(len(bloc))
+    shutil.copystat(src, dest)
+
+
 def importer(source, parent, progression=None):
-    """Copie source -> parent/AAAA-MM-JJ/. Retourne un bilan (dict)."""
+    """Copie source -> parent/AAAA-MM-JJ/. Retourne un bilan (dict).
+    progression(i, n, nom, octets_traites, octets_total) est appelée
+    régulièrement pendant la copie."""
     fichiers = lister_medias(source)
+    tailles = []
+    for f in fichiers:
+        try:
+            tailles.append(f.stat().st_size)
+        except OSError:
+            tailles.append(0)
+    total_octets = sum(tailles)
+    faits = 0
     bilan = {"total": len(fichiers), "copies": 0, "deja_presents": 0,
              "sans_exif": 0, "erreurs": [], "dossiers": set()}
-    for i, src in enumerate(fichiers, 1):
-        if progression:
-            progression(i, len(fichiers), src.name)
+    for i, (src, taille) in enumerate(zip(fichiers, tailles), 1):
+        def signaler(octets_fichier=0, i=i, src=src, base=faits):
+            if progression:
+                progression(i, len(fichiers), src.name,
+                            base + octets_fichier, total_octets)
+        signaler()
+        dest = None
         try:
             date, exif_ok = date_prise_de_vue(src)
             if not exif_ok:
                 bilan["sans_exif"] += 1
             dossier = Path(parent) / date.strftime("%Y-%m-%d")
             dossier.mkdir(parents=True, exist_ok=True)
-            taille = src.stat().st_size
             dest, deja = _destination_libre(dossier / src.name, taille)
             bilan["dossiers"].add(dossier)
             if deja:
                 bilan["deja_presents"] += 1
-                continue
-            shutil.copy2(src, dest)
-            if dest.stat().st_size != taille:
-                dest.unlink()
-                raise OSError("copie incomplète")
-            bilan["copies"] += 1
+                dest = None
+            else:
+                copies = [0]
+
+                def avance(n):
+                    copies[0] += n
+                    signaler(copies[0])
+                _copier(src, dest, avance)
+                if dest.stat().st_size != taille:
+                    raise OSError("copie incomplète")
+                bilan["copies"] += 1
         except Exception as e:  # on continue avec les autres fichiers
             bilan["erreurs"].append(f"{src.name} : {e}")
+            if dest is not None:      # ne pas laisser de fichier tronqué
+                try:
+                    dest.unlink()
+                except OSError:
+                    pass
+        faits += taille
+    if progression and fichiers:
+        progression(len(fichiers), len(fichiers), "", total_octets, total_octets)
     return bilan
+
+
+def taille_lisible(octets):
+    for unite in ("o", "Ko", "Mo", "Go"):
+        if octets < 1024 or unite == "Go":
+            texte = f"{octets:.0f}" if unite in ("o", "Ko") else f"{octets:.1f}"
+            return f"{texte.replace('.', ',')} {unite}"
+        octets /= 1024
+
+
+def duree_lisible(secondes):
+    if secondes < 60:
+        return f"{max(int(secondes), 1)} s"
+    minutes = int(secondes // 60)
+    if minutes < 60:
+        return f"{minutes} min {int(secondes % 60):02d} s"
+    return f"{minutes // 60} h {minutes % 60:02d} min"
 
 
 # --------------------------------------------------------------------------
@@ -410,6 +467,8 @@ def lancer_interface():
             self.cote_chemin = object()  # photo montrée dans le panneau latéral
             self.nav_boite = None
             self.nav_tk = self.histo_tk = None
+            self.progression = None    # (i, n, nom, octets faits, octets total)
+            self.debut_import = 0.0
 
             self._theme()
 
@@ -593,11 +652,21 @@ def lancer_interface():
                 pass
 
             self.import_en_cours = True
+            self.progression = None
+            self.debut_import = time.monotonic()
             self.texte_progression.config(text="Lecture de la carte…")
+            self._dessiner_progression()
 
             def travail():
-                def progression(i, n, nom):
-                    self.file_messages.put(("progression", i, n, nom))
+                dernier = [0.0]
+
+                def progression(i, n, nom, faits, total):
+                    # au plus ~20 messages par seconde vers l'interface
+                    maintenant = time.monotonic()
+                    if maintenant - dernier[0] >= 0.05 or faits >= total:
+                        dernier[0] = maintenant
+                        self.file_messages.put(
+                            ("progression", i, n, nom, faits, total))
                 try:
                     bilan = importer(source, parent, progression)
                     self.file_messages.put(("fin", bilan))
@@ -612,20 +681,66 @@ def lancer_interface():
                 while True:
                     msg = self.file_messages.get_nowait()
                     if msg[0] == "progression":
-                        _, i, n, nom = msg
-                        self.barre_progression.config(maximum=n, value=i)
-                        self.texte_progression.config(text=f"{i} / {n}   {nom}")
+                        self.progression = msg[1:]
                     elif msg[0] == "fin":
+                        self.canevas.delete("progression")
                         self._fin_import(msg[1])
                         return
                     else:
                         self.import_en_cours = False
+                        self.canevas.delete("progression")
+                        self.barre_progression.config(value=0)
                         self.texte_progression.config(text="")
                         messagebox.showerror("Import impossible", msg[1])
                         return
             except queue.Empty:
                 pass
+            self._dessiner_progression()
             self.racine.after(100, self._suivre_import)
+
+        def _dessiner_progression(self):
+            """Panneau de progression de la copie, au centre de la fenêtre."""
+            c = self.canevas
+            c.delete("progression")
+            if not self.import_en_cours:
+                return
+            largeur, hauteur = max(c.winfo_width(), 50), max(c.winfo_height(), 50)
+            l = min(520, largeur - 40)
+            x0, y0 = (largeur - l) / 2, hauteur / 2 - 75
+            t = "progression"
+            c.create_rectangle(x0, y0, x0 + l, y0 + 150, fill=PANNEAU,
+                               outline=BORD, width=1, tags=t)
+            if not self.progression:
+                c.create_text(x0 + 24, y0 + 75, anchor="w", fill=TEXTE,
+                              font=(POLICE, 15, "bold"), tags=t,
+                              text="Lecture de la carte…")
+                return
+            i, n, nom, faits, total = self.progression
+            part = faits / total if total else (i / n if n else 1.0)
+            part = min(max(part, 0.0), 1.0)
+            c.create_text(x0 + 24, y0 + 30, anchor="w", fill=TEXTE,
+                          font=(POLICE, 15, "bold"), tags=t,
+                          text=f"Copie des photos — {i} / {n}")
+            c.create_text(x0 + l - 24, y0 + 30, anchor="e", fill=ACCENT,
+                          font=(POLICE, 15, "bold"), tags=t,
+                          text=f"{part * 100:.0f} %")
+            c.create_rectangle(x0 + 24, y0 + 56, x0 + l - 24, y0 + 68,
+                               fill=SURFACE, outline="", tags=t)
+            if part > 0:
+                c.create_rectangle(x0 + 24, y0 + 56,
+                                   x0 + 24 + (l - 48) * part, y0 + 68,
+                                   fill=ACCENT, outline="", tags=t)
+            c.create_text(x0 + 24, y0 + 92, anchor="w", fill=TEXTE_2,
+                          font=(POLICE, 12), tags=t, text=nom)
+            ecoule = time.monotonic() - self.debut_import
+            detail = f"{taille_lisible(faits)} sur {taille_lisible(total)}"
+            if 0.02 < part < 1.0 and ecoule > 2:
+                reste = ecoule * (1 - part) / part
+                detail += f"   ·   environ {duree_lisible(reste)} restantes"
+            c.create_text(x0 + 24, y0 + 118, anchor="w", fill=TEXTE_2,
+                          font=(POLICE, 12), tags=t, text=detail)
+            self.barre_progression.config(maximum=1000, value=part * 1000)
+            self.texte_progression.config(text=f"{i} / {n}")
 
         def _fin_import(self, bilan):
             self.import_en_cours = False
@@ -1016,6 +1131,7 @@ def lancer_interface():
                 self.zone_visible = None
                 self.maj_cote(None, None)
                 self._centrer_bande()
+                self._dessiner_progression()
                 return
 
             photo = self.photos[self.index]
@@ -1073,6 +1189,7 @@ def lancer_interface():
                              (REJET, "rejets")):
                 self.compteurs[cle].config(text=f"●  {statuts.count(cle)} {nom}")
             self._centrer_bande()
+            self._dessiner_progression()
 
     racine = tk.Tk()
     Application(racine)
