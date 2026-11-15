@@ -1,0 +1,122 @@
+# Construit les installateurs macOS (.dmg), Windows (setup .exe) et Linux
+# (.deb + .tar.gz) à chaque tag, puis les attache à une release GitHub.
+name: Installateurs
+
+on:
+  push:
+    tags: ['*']
+  workflow_dispatch:   # lancement manuel : construit sans publier de release
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    name: ${{ matrix.nom }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { os: macos-latest,   nom: macOS Apple Silicon, cible: macos-arm64 }
+          - { os: macos-15-intel, nom: macOS Intel,         cible: macos-intel }
+          - { os: windows-latest, nom: Windows,             cible: windows }
+          - { os: ubuntu-22.04,   nom: Linux,               cible: linux }
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Version (nom du tag sans le « v »)
+        shell: bash
+        run: |
+          if [[ "$GITHUB_REF" == refs/tags/* ]]; then V="${GITHUB_REF_NAME#v}"; else V="0.0.0"; fi
+          echo "VERSION=$V" >> "$GITHUB_ENV"
+
+      - name: Dépendances
+        run: python -m pip install -r requirements.txt pyinstaller
+
+      - name: PyInstaller
+        shell: bash
+        run: |
+          MODE=--onedir
+          if [[ "$RUNNER_OS" == Linux ]]; then MODE=--onefile; fi
+          pyinstaller --noconfirm --windowed $MODE --name PhotoImport \
+            --collect-all rawpy --collect-all pillow_heif \
+            --osx-bundle-identifier io.github.davidsanchez.photoimport \
+            import_photos.py
+
+      - name: macOS — image disque .dmg
+        if: runner.os == 'macOS'
+        run: |
+          mkdir dmg
+          cp -R dist/PhotoImport.app dmg/
+          ln -s /Applications dmg/Applications
+          hdiutil create -volname PhotoImport -srcfolder dmg -ov -format UDZO \
+            "PhotoImport-$VERSION-${{ matrix.cible }}.dmg"
+
+      - name: Windows — installateur (Inno Setup)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $iscc = Get-ChildItem "C:\Program Files (x86)\Inno Setup*\ISCC.exe" -ErrorAction SilentlyContinue | Select-Object -First 1
+          if (-not $iscc) {
+            choco install innosetup -y --no-progress
+            $iscc = Get-ChildItem "C:\Program Files (x86)\Inno Setup*\ISCC.exe" | Select-Object -First 1
+          }
+          & $iscc.FullName "/DVersion=$env:VERSION" installer\windows.iss
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+      - name: Linux — paquet .deb et archive .tar.gz
+        if: runner.os == 'Linux'
+        run: |
+          P=paquet
+          mkdir -p $P/DEBIAN $P/usr/bin $P/usr/share/applications
+          install -m 755 dist/PhotoImport $P/usr/bin/photoimport
+          install -m 644 installer/photoimport.desktop $P/usr/share/applications/
+          DEBV="$VERSION"
+          [[ "$DEBV" =~ ^[0-9] ]] || DEBV="0~$DEBV"
+          {
+            echo "Package: photoimport"
+            echo "Version: $DEBV"
+            echo "Section: graphics"
+            echo "Priority: optional"
+            echo "Architecture: amd64"
+            echo "Maintainer: PhotoImport <noreply@users.noreply.github.com>"
+            echo "Description: Import de photos depuis une carte SD et tri rapide"
+          } > $P/DEBIAN/control
+          dpkg-deb --build --root-owner-group $P "PhotoImport-$VERSION-linux-amd64.deb"
+          tar -czf "PhotoImport-$VERSION-linux-x86_64.tar.gz" -C dist PhotoImport
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: PhotoImport-${{ matrix.cible }}
+          if-no-files-found: error
+          path: |
+            *.dmg
+            dist/*-setup.exe
+            *.deb
+            *.tar.gz
+
+  release:
+    name: Release GitHub
+    needs: build
+    # publie ce qui a été construit, même si une des plateformes a échoué
+    if: ${{ !cancelled() && startsWith(github.ref, 'refs/tags/') }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: fichiers
+          merge-multiple: true
+      - name: Créer la release et y joindre les installateurs
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          ls -l fichiers
+          gh release create "$GITHUB_REF_NAME" fichiers/* \
+              --repo "$GITHUB_REPOSITORY" --title "$GITHUB_REF_NAME" --generate-notes \
+            || gh release upload "$GITHUB_REF_NAME" fichiers/* \
+              --repo "$GITHUB_REPOSITORY" --clobber

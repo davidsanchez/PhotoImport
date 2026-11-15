@@ -1,0 +1,5 @@
+Pillow
+rawpy
+exifread
+pillow-heif
+send2trash
