@@ -12,6 +12,7 @@ Import de photos depuis une carte SD et tri rapide (macOS, Windows, Linux).
 - Panneau de droite : vue d'ensemble de la photo avec le cadre de la zone
   affichée (clic ou glissé pour s'y déplacer) et histogramme rouge / vert / bleu.
 - Bouton « Supprimer les photos rejetées » (avec confirmation).
+- Interface en français ou en anglais (bouton « English / Français »).
 
 ## Installation
 

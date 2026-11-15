@@ -10,6 +10,7 @@ Import de photos depuis une carte SD + visionneuse de tri
         X = rejet      N = neutre      P = gardé
         <- / -> = photo précédente / suivante
      Zoom : boutons + / -, touches + / -, molette de la souris.
+     Bouton « English / Français » : langue de l'interface (mémorisée).
      Photo zoomée : cliquer-glisser pour se déplacer ; double-clic dans
      la photo (ou touche 0) pour l'ajuster à la fenêtre.
      Bande de vignettes en bas : toutes les photos du dossier avec leur
@@ -82,6 +83,106 @@ PAS_ZOOM = 1.25
 VIGNETTE = (96, 72)       # taille max des vignettes de la bande
 LARGEUR_CASE = 112
 HAUTEUR_BANDE = 112
+
+# --------------------------------------------------------------------------
+# Langue de l'interface (français par défaut, anglais via le bouton)
+# --------------------------------------------------------------------------
+
+FICHIER_PREFERENCES = Path.home() / ".photoimport.json"
+LANGUE = "fr"
+
+ANGLAIS = {
+    "Import et tri de photos": "Photo import and culling",
+    "Importer la carte SD…": "Import SD card…",
+    "Ouvrir un dossier…": "Open folder…",
+    "Supprimer les photos rejetées": "Delete rejected photos",
+    "Ajuster": "Fit",
+    "NAVIGATION": "NAVIGATOR",
+    "HISTOGRAMME": "HISTOGRAM",
+    "RACCOURCIS": "SHORTCUTS",
+    "X   rejet\nN   neutre\nP   gardé\n"
+    "←  →   photo précédente / suivante\n"
+    "+  −   zoom\n0 ou double-clic   ajuster":
+        "X   reject\nN   unflagged\nP   pick\n"
+        "←  →   previous / next photo\n"
+        "+  −   zoom\n0 or double-click   fit",
+    "Carte SD détectée": "SD card detected",
+    "Importer depuis :\n{} ?": "Import from:\n{}?",
+    "Choisir la carte SD (ou le dossier source)":
+        "Choose the SD card (or source folder)",
+    "Choisir le dossier parent de destination":
+        "Choose the destination parent folder",
+    "Destination invalide": "Invalid destination",
+    "La destination ne peut pas être sur la carte source.":
+        "The destination cannot be on the source card.",
+    "Lecture de la carte…": "Reading card…",
+    "Import impossible": "Import failed",
+    "Copie des photos — {} / {}": "Copying photos — {} / {}",
+    "{} sur {}": "{} of {}",
+    "   ·   environ {} restantes": "   ·   about {} left",
+    "{} fichier(s) copié(s) sur {} trouvé(s).":
+        "{} file(s) copied out of {} found.",
+    "{} déjà présent(s), ignoré(s).": "{} already present, skipped.",
+    "{} sans date de prise de vue : classé(s) selon la date du fichier.":
+        "{} without a capture date: filed by file date.",
+    "\n{} erreur(s) :": "\n{} error(s):",
+    "Aucune photo trouvée dans la source.": "No photos found in the source.",
+    "Import terminé": "Import complete",
+    "Choisir le dossier à trier": "Choose the folder to review",
+    "Enregistrement impossible": "Could not save",
+    "Rejets": "Rejects",
+    "Aucune photo marquée en rejet.": "No photos marked as rejected.",
+    "Les fichiers seront placés dans la Corbeille.":
+        "The files will be moved to the Trash.",
+    "ATTENTION : suppression définitive, sans passer par la Corbeille.\n"
+    "(Installez send2trash pour utiliser la Corbeille.)":
+        "WARNING: permanent deletion, bypassing the Trash.\n"
+        "(Install send2trash to use the Trash.)",
+    "Supprimer {} photo(s) rejetée(s), soit {} fichier(s) ?":
+        "Delete {} rejected photo(s), {} file(s) in total?",
+    "Fichiers non supprimés": "Files not deleted",
+    "Importez une carte SD ou ouvrez un dossier à trier":
+        "Import an SD card or open a folder to review",
+    "Aperçu indisponible": "Preview unavailable",
+    "(pip3 install rawpy pour afficher les RAW)":
+        "(pip3 install rawpy to display RAW files)",
+    "REJET": "REJECT", "NEUTRE": "UNFLAGGED", "GARDÉ": "PICK",
+    "gardés": "picks", "neutres": "unflagged", "rejets": "rejects",
+    "copie incomplète": "incomplete copy",
+    "o": "B", "Ko": "KB", "Mo": "MB", "Go": "GB",
+}
+
+
+def T(texte):
+    """Texte de l'interface dans la langue courante (clé = texte français)."""
+    return ANGLAIS.get(texte, texte) if LANGUE == "en" else texte
+
+
+def nombre(valeur, decimales=1):
+    texte = f"{valeur:.{decimales}f}"
+    return texte if LANGUE == "en" else texte.replace(".", ",")
+
+
+def charger_preferences():
+    global LANGUE
+    try:
+        with open(FICHIER_PREFERENCES, encoding="utf-8") as f:
+            langue = json.load(f).get("langue")
+        if langue in ("fr", "en"):
+            LANGUE = langue
+    except (OSError, ValueError, AttributeError):
+        pass
+
+
+def changer_langue(langue):
+    global LANGUE
+    LANGUE = langue
+    try:
+        with open(FICHIER_PREFERENCES, "w", encoding="utf-8") as f:
+            json.dump({"langue": langue}, f)
+    except OSError:
+        pass
+
 
 REJET, NEUTRE, GARDE = "rejet", "neutre", "garde"
 LIBELLES = {REJET: "REJET", NEUTRE: "NEUTRE", GARDE: "GARDÉ"}
@@ -280,7 +381,7 @@ def importer(source, parent, progression=None):
                     signaler(copies[0])
                 _copier(src, dest, avance)
                 if dest.stat().st_size != taille:
-                    raise OSError("copie incomplète")
+                    raise OSError(T("copie incomplète"))
                 bilan["copies"] += 1
         except Exception as e:  # on continue avec les autres fichiers
             bilan["erreurs"].append(f"{src.name} : {e}")
@@ -298,8 +399,8 @@ def importer(source, parent, progression=None):
 def taille_lisible(octets):
     for unite in ("o", "Ko", "Mo", "Go"):
         if octets < 1024 or unite == "Go":
-            texte = f"{octets:.0f}" if unite in ("o", "Ko") else f"{octets:.1f}"
-            return f"{texte.replace('.', ',')} {unite}"
+            return (f"{nombre(octets, 0 if unite in ('o', 'Ko') else 1)} "
+                    f"{T(unite)}")
         octets /= 1024
 
 
@@ -441,7 +542,6 @@ def lancer_interface():
     class Application:
         def __init__(self, racine):
             self.racine = racine
-            racine.title("Import et tri de photos")
             racine.geometry("1400x880")
             racine.minsize(900, 600)
 
@@ -470,17 +570,25 @@ def lancer_interface():
             self.progression = None    # (i, n, nom, octets faits, octets total)
             self.debut_import = 0.0
 
+            self._construire_interface()
+            self.afficher()
+            self._recevoir_vignettes()
+
+        def _construire_interface(self):
+            """Crée tous les widgets (rappelée au changement de langue)."""
+            racine = self.racine
+            racine.title(T("Import et tri de photos"))
             self._theme()
 
             # ----- barre d'outils -----
             barre = ttk.Frame(racine, padding=(12, 10))
             barre.pack(side="top", fill="x")
-            ttk.Button(barre, text="Importer la carte SD…",
+            ttk.Button(barre, text=T("Importer la carte SD…"),
                        style="Accent.TButton", takefocus=0,
                        command=self.lancer_import).pack(side="left", padx=(0, 8))
-            ttk.Button(barre, text="Ouvrir un dossier…", takefocus=0,
+            ttk.Button(barre, text=T("Ouvrir un dossier…"), takefocus=0,
                        command=self.ouvrir_dossier).pack(side="left", padx=(0, 8))
-            ttk.Button(barre, text="Supprimer les photos rejetées",
+            ttk.Button(barre, text=T("Supprimer les photos rejetées"),
                        style="Danger.TButton", takefocus=0,
                        command=self.supprimer_rejets).pack(side="left")
             tk.Frame(barre, width=1, bg=BORD).pack(side="left", fill="y", padx=14)
@@ -490,14 +598,18 @@ def lancer_interface():
             ttk.Button(barre, text="+", width=3, takefocus=0,
                        command=lambda: self.changer_zoom(PAS_ZOOM)
                        ).pack(side="left", padx=(4, 0))
-            ttk.Button(barre, text="Ajuster", takefocus=0,
+            ttk.Button(barre, text=T("Ajuster"), takefocus=0,
                        command=self.reinit_zoom_et_afficher
                        ).pack(side="left", padx=(8, 0))
             self.texte_zoom = ttk.Label(barre, text="", width=7,
                                         style="Discret.TLabel")
             self.texte_zoom.pack(side="left", padx=10)
+            # bouton de langue : affiche la langue vers laquelle on bascule
+            ttk.Button(barre, takefocus=0, command=self.basculer_langue,
+                       text="English" if LANGUE == "fr" else "Français"
+                       ).pack(side="right")
             self.barre_progression = ttk.Progressbar(barre, length=180)
-            self.barre_progression.pack(side="right")
+            self.barre_progression.pack(side="right", padx=(0, 14))
             self.texte_progression = ttk.Label(barre, text="",
                                                style="Discret.TLabel")
             self.texte_progression.pack(side="right", padx=10)
@@ -552,22 +664,22 @@ def lancer_interface():
                          font=(POLICE, 10, "bold")
                          ).pack(fill="x", padx=14, pady=(16, 6))
 
-            titre("NAVIGATION")
+            titre(T("NAVIGATION"))
             self.nav = tk.Canvas(cote, width=NAV[0], height=NAV[1], bg=FOND,
                                  highlightthickness=0, cursor="crosshair")
             self.nav.pack(padx=14)
             self.nav.bind("<ButtonPress-1>", self._clic_nav)
             self.nav.bind("<B1-Motion>", self._clic_nav)
-            titre("HISTOGRAMME")
+            titre(T("HISTOGRAMME"))
             self.histo = tk.Canvas(cote, width=NAV[0], height=HAUTEUR_HISTO,
                                    bg=FOND, highlightthickness=0)
             self.histo.pack(padx=14)
-            titre("RACCOURCIS")
+            titre(T("RACCOURCIS"))
             tk.Label(cote, bg=PANNEAU, fg=TEXTE_2, justify="left", anchor="w",
                      font=(POLICE, 11),
-                     text="X   rejet\nN   neutre\nP   gardé\n"
-                          "←  →   photo précédente / suivante\n"
-                          "+  −   zoom\n0 ou double-clic   ajuster"
+                     text=T("X   rejet\nN   neutre\nP   gardé\n"
+                            "←  →   photo précédente / suivante\n"
+                            "+  −   zoom\n0 ou double-clic   ajuster")
                      ).pack(fill="x", padx=14)
 
             # ----- photo -----
@@ -583,8 +695,17 @@ def lancer_interface():
                               lambda _e: self.reinit_zoom_et_afficher())
 
             racine.bind("<KeyPress>", self.touche)
+
+        def basculer_langue(self):
+            changer_langue("en" if LANGUE == "fr" else "fr")
+            for widget in self.racine.winfo_children():
+                widget.destroy()
+            self.cote_chemin = object()
+            self.nav_boite = None
+            self._construire_interface()
+            self.racine.update_idletasks()
+            self.construire_bande()
             self.afficher()
-            self._recevoir_vignettes()
 
         def _theme(self):
             """Thème sombre (le thème « clam » accepte des couleurs sur macOS)."""
@@ -625,28 +746,29 @@ def lancer_interface():
             source = None
             if len(cartes) == 1:
                 if messagebox.askyesno(
-                        "Carte SD détectée",
-                        f"Importer depuis :\n{cartes[0]} ?"):
+                        T("Carte SD détectée"),
+                        T("Importer depuis :\n{} ?").format(cartes[0])):
                     source = cartes[0]
             if source is None:
                 depart = (str(cartes[0]) if cartes else
                           "/Volumes" if sys.platform == "darwin" else None)
                 choix = filedialog.askdirectory(
-                    title="Choisir la carte SD (ou le dossier source)",
+                    title=T("Choisir la carte SD (ou le dossier source)"),
                     initialdir=depart)
                 if not choix:
                     return
                 source = Path(choix)
             parent = filedialog.askdirectory(
-                title="Choisir le dossier parent de destination")
+                title=T("Choisir le dossier parent de destination"))
             if not parent:
                 return
             parent = Path(parent)
             try:
                 if parent.resolve().is_relative_to(Path(source).resolve()):
                     messagebox.showerror(
-                        "Destination invalide",
-                        "La destination ne peut pas être sur la carte source.")
+                        T("Destination invalide"),
+                        T("La destination ne peut pas être sur la carte "
+                          "source."))
                     return
             except OSError:
                 pass
@@ -654,7 +776,7 @@ def lancer_interface():
             self.import_en_cours = True
             self.progression = None
             self.debut_import = time.monotonic()
-            self.texte_progression.config(text="Lecture de la carte…")
+            self.texte_progression.config(text=T("Lecture de la carte…"))
             self._dessiner_progression()
 
             def travail():
@@ -691,7 +813,7 @@ def lancer_interface():
                         self.canevas.delete("progression")
                         self.barre_progression.config(value=0)
                         self.texte_progression.config(text="")
-                        messagebox.showerror("Import impossible", msg[1])
+                        messagebox.showerror(T("Import impossible"), msg[1])
                         return
             except queue.Empty:
                 pass
@@ -713,14 +835,14 @@ def lancer_interface():
             if not self.progression:
                 c.create_text(x0 + 24, y0 + 75, anchor="w", fill=TEXTE,
                               font=(POLICE, 15, "bold"), tags=t,
-                              text="Lecture de la carte…")
+                              text=T("Lecture de la carte…"))
                 return
             i, n, nom, faits, total = self.progression
             part = faits / total if total else (i / n if n else 1.0)
             part = min(max(part, 0.0), 1.0)
             c.create_text(x0 + 24, y0 + 30, anchor="w", fill=TEXTE,
                           font=(POLICE, 15, "bold"), tags=t,
-                          text=f"Copie des photos — {i} / {n}")
+                          text=T("Copie des photos — {} / {}").format(i, n))
             c.create_text(x0 + l - 24, y0 + 30, anchor="e", fill=ACCENT,
                           font=(POLICE, 15, "bold"), tags=t,
                           text=f"{part * 100:.0f} %")
@@ -733,10 +855,12 @@ def lancer_interface():
             c.create_text(x0 + 24, y0 + 92, anchor="w", fill=TEXTE_2,
                           font=(POLICE, 12), tags=t, text=nom)
             ecoule = time.monotonic() - self.debut_import
-            detail = f"{taille_lisible(faits)} sur {taille_lisible(total)}"
+            detail = T("{} sur {}").format(taille_lisible(faits),
+                                           taille_lisible(total))
             if 0.02 < part < 1.0 and ecoule > 2:
                 reste = ecoule * (1 - part) / part
-                detail += f"   ·   environ {duree_lisible(reste)} restantes"
+                detail += T("   ·   environ {} restantes").format(
+                    duree_lisible(reste))
             c.create_text(x0 + 24, y0 + 118, anchor="w", fill=TEXTE_2,
                           font=(POLICE, 12), tags=t, text=detail)
             self.barre_progression.config(maximum=1000, value=part * 1000)
@@ -746,19 +870,20 @@ def lancer_interface():
             self.import_en_cours = False
             self.barre_progression.config(value=0)
             self.texte_progression.config(text="")
-            lignes = [f"{bilan['copies']} fichier(s) copié(s) "
-                      f"sur {bilan['total']} trouvé(s).",
-                      f"{bilan['deja_presents']} déjà présent(s), ignoré(s)."]
+            lignes = [T("{} fichier(s) copié(s) sur {} trouvé(s).").format(
+                          bilan["copies"], bilan["total"]),
+                      T("{} déjà présent(s), ignoré(s).").format(
+                          bilan["deja_presents"])]
             if bilan["sans_exif"]:
                 lignes.append(
-                    f"{bilan['sans_exif']} sans date de prise de vue : "
-                    "classé(s) selon la date du fichier.")
+                    T("{} sans date de prise de vue : classé(s) selon la "
+                      "date du fichier.").format(bilan["sans_exif"]))
             if bilan["erreurs"]:
-                lignes.append(f"\n{len(bilan['erreurs'])} erreur(s) :")
+                lignes.append(T("\n{} erreur(s) :").format(len(bilan["erreurs"])))
                 lignes += bilan["erreurs"][:10]
             if bilan["total"] == 0:
-                lignes = ["Aucune photo trouvée dans la source."]
-            messagebox.showinfo("Import terminé", "\n".join(lignes))
+                lignes = [T("Aucune photo trouvée dans la source.")]
+            messagebox.showinfo(T("Import terminé"), "\n".join(lignes))
             fichiers = []
             for dossier in sorted(bilan["dossiers"]):
                 fichiers += [p for p in dossier.iterdir()
@@ -770,7 +895,8 @@ def lancer_interface():
         # ---------------- liste de photos ----------------
 
         def ouvrir_dossier(self):
-            choix = filedialog.askdirectory(title="Choisir le dossier à trier")
+            choix = filedialog.askdirectory(
+                title=T("Choisir le dossier à trier"))
             if choix:
                 self.charger_photos(lister_medias(choix))
 
@@ -804,7 +930,7 @@ def lancer_interface():
             try:
                 sauver_classement(photo.dossier, classement)
             except OSError as e:
-                messagebox.showerror("Enregistrement impossible", str(e))
+                messagebox.showerror(T("Enregistrement impossible"), str(e))
             self.bande.itemconfig(f"statut{self.index}", fill=COULEURS[statut])
             if self.index < len(self.photos) - 1:
                 self.index += 1
@@ -814,19 +940,20 @@ def lancer_interface():
         def supprimer_rejets(self):
             rejets = [p for p in self.photos if self.statut(p) == REJET]
             if not rejets:
-                messagebox.showinfo("Rejets", "Aucune photo marquée en rejet.")
+                messagebox.showinfo(T("Rejets"),
+                                    T("Aucune photo marquée en rejet."))
                 return
             nb_fichiers = sum(len(p.fichiers) for p in rejets)
             if send2trash is not None:
-                suite = "Les fichiers seront placés dans la Corbeille."
+                suite = T("Les fichiers seront placés dans la Corbeille.")
             else:
-                suite = ("ATTENTION : suppression définitive, sans passer par "
-                         "la Corbeille.\n(Installez send2trash pour utiliser "
-                         "la Corbeille.)")
+                suite = T("ATTENTION : suppression définitive, sans passer par "
+                          "la Corbeille.\n(Installez send2trash pour utiliser "
+                          "la Corbeille.)")
             if not messagebox.askyesno(
-                    "Supprimer les photos rejetées",
-                    f"Supprimer {len(rejets)} photo(s) rejetée(s), soit "
-                    f"{nb_fichiers} fichier(s) ?\n\n{suite}",
+                    T("Supprimer les photos rejetées"),
+                    T("Supprimer {} photo(s) rejetée(s), soit {} fichier(s) ?"
+                      ).format(len(rejets), nb_fichiers) + f"\n\n{suite}",
                     icon="warning", default="no"):
                 return
             erreurs = []
@@ -855,7 +982,7 @@ def lancer_interface():
             self.construire_bande()
             self.afficher()
             if erreurs:
-                messagebox.showwarning("Fichiers non supprimés",
+                messagebox.showwarning(T("Fichiers non supprimés"),
                                        "\n".join(erreurs[:10]))
 
         # ---------------- bande de vignettes ----------------
@@ -1121,7 +1248,7 @@ def lancer_interface():
                 c.create_text(
                     *centre, fill=TEXTE_2, font=(POLICE, 17),
                     justify="center",
-                    text="Importez une carte SD ou ouvrez un dossier à trier")
+                    text=T("Importez une carte SD ou ouvrez un dossier à trier"))
                 self.etiquette_statut.config(text="", bg=PANNEAU)
                 self.etiquette_info.config(text="")
                 for etiquette in self.compteurs.values():
@@ -1142,8 +1269,10 @@ def lancer_interface():
                 c.create_text(
                     *centre, fill=TEXTE_2, font=(POLICE, 15),
                     justify="center",
-                    text=f"Aperçu indisponible\n{photo.fichier_affichable().name}"
-                         + ("\n\n(pip3 install rawpy pour afficher les RAW)"
+                    text=T("Aperçu indisponible")
+                         + f"\n{photo.fichier_affichable().name}"
+                         + ("\n\n" + T("(pip3 install rawpy pour afficher "
+                                        "les RAW)")
                             if rawpy is None and
                             photo.fichier_affichable().suffix.lower() in EXT_RAW
                             else ""))
@@ -1172,12 +1301,12 @@ def lancer_interface():
                 c.create_image(*centre, image=self.image_tk)
 
             self.maj_cote(photo.fichier_affichable(), apercu)
-            self.texte_zoom.config(text=f"× {self.zoom:.1f}".replace(".", ","))
+            self.texte_zoom.config(text=f"× {nombre(self.zoom)}")
             statut = self.statut(photo)
             if statut != NEUTRE:  # liseré de couleur autour de l'image
                 c.create_rectangle(2, 2, largeur - 2, hauteur - 2,
                                    outline=COULEURS[statut], width=4)
-            self.etiquette_statut.config(text=LIBELLES[statut],
+            self.etiquette_statut.config(text=T(LIBELLES[statut]),
                                          bg=COULEURS[statut])
             extensions = " + ".join(sorted(f.suffix.upper().lstrip(".")
                                            for f in photo.fichiers))
@@ -1187,10 +1316,12 @@ def lancer_interface():
             statuts = [self.statut(p) for p in self.photos]
             for cle, nom in ((GARDE, "gardés"), (NEUTRE, "neutres"),
                              (REJET, "rejets")):
-                self.compteurs[cle].config(text=f"●  {statuts.count(cle)} {nom}")
+                self.compteurs[cle].config(
+                    text=f"●  {statuts.count(cle)} {T(nom)}")
             self._centrer_bande()
             self._dessiner_progression()
 
+    charger_preferences()
     racine = tk.Tk()
     Application(racine)
     racine.mainloop()
